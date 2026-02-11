@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .filter-section { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .filter-section label { color: var(--muted); font-size: 0.9rem; }
+        .filter-section select {
+            background: var(--bg); color: var(--text); border: 1px solid var(--border);
+            border-radius: 8px; padding: 0.5rem 2rem 0.5rem 0.75rem; font-size: 0.95rem;
+            cursor: pointer; min-width: 180px;
+        }
+        .filter-section select:hover, .filter-section select:focus { border-color: var(--accent); outline: none; }
+        .chart-section .chart-container { position: relative; height: 380px; }
+        .error-state { color: var(--error); }
+        .api-link { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+        .api-link a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+        .api-link a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <a href="index.html" class="logo">Expense Tracker</a>
+            <nav class="nav">
+                <a href="index.html" class="active">Dashboard</a>
+                <a href="categories.html">Categories</a>
+                <a href="expenses.html">Expenses</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- Filter section -->
+        <section class="card filter-section-card">
+            <div class="section-title">Filter</div>
+            <div class="filter-section">
+                <label for="categoryFilter">Category</label>
+                <select id="categoryFilter" aria-label="Filter by category">
+                    <option value="">All categories</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- Chart section -->
+        <section class="card chart-section">
+            <div class="section-title">Total expenses by category</div>
+            <div id="chartLoading" class="loading-state" style="display: none;">
+                <span class="loading-spinner"></span>
+                <span style="margin-left: 0.5rem;">Loading chart…</span>
+            </div>
+            <div id="chartError" class="error-state" style="display: none;"></div>
+            <div class="chart-container" id="chartContainer">
+                <canvas id="expenseChart" aria-label="Bar chart: category names on X-axis, total expense amount on Y-axis"></canvas>
+            </div>
+            <div id="chartEmpty" class="empty-state" style="display: none;">
+                No expense data. Add categories and expenses via the API.
+            </div>
+            <div class="api-link">
+                <a href="/swagger" target="_blank">API documentation (Swagger)</a>
+            </div>
+        </section>
+
+        <!-- Expense table section -->
+        <section class="card table-section">
+            <div class="section-title">Expenses</div>
+            <div id="tableLoading" class="loading-state" style="display: none;">
+                <span class="loading-spinner"></span>
+                <span style="margin-left: 0.5rem;">Loading expenses…</span>
+            </div>
+            <div id="tableError" class="error-state" style="display: none;"></div>
+            <div id="tableEmpty" class="empty-state" style="display: none;">
+                No expenses to display.
+            </div>
+            <div class="table-wrapper" id="tableWrapper" style="display: none;">
+                <table class="expense-table" id="expenseTable">
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Expense date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expenseTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const API_BASE = '';
+
+        let chartInstance = null;
+        let categories = [];
+        let expenses = [];
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        // ---------- API: GET /categories ----------
+        async function loadCategories() {
+            const res = await fetch(API_BASE + '/api/categories');
+            if (!res.ok) throw new Error('Failed to load categories');
+            const data = await res.json();
+            categories = data;
+            return data;
+        }
+
+        // ---------- API: GET /expenses ----------
+        async function loadExpenses() {
+            const res = await fetch(API_BASE + '/api/expenses');
+            if (!res.ok) throw new Error('Failed to load expenses');
+            const data = await res.json();
+            expenses = data;
+            return data;
+        }
+
+        // ---------- Populate category dropdown ----------
+        function renderCategoryFilter() {
+            const sel = document.getElementById('categoryFilter');
+            sel.innerHTML = '<option value="">All categories</option>' +
+                categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+        }
+
+        // ---------- Compute summary by category (for chart) ----------
+        function getSummaryByCategory(expenseList) {
+            const byCategory = {};
+            for (const e of expenseList) {
+                const key = e.categoryId;
+                if (!byCategory[key]) {
+                    byCategory[key] = { categoryId: e.categoryId, categoryName: e.categoryName || 'Unknown', totalAmount: 0 };
+                }
+                byCategory[key].totalAmount += Number(e.amount);
+            }
+            return Object.values(byCategory).sort((a, b) => b.totalAmount - a.totalAmount);
+        }
+
+        // ---------- Filter expenses by selected category ----------
+        function getFilteredExpenses() {
+            const categoryId = document.getElementById('categoryFilter').value;
+            if (!categoryId) return expenses;
+            const id = parseInt(categoryId, 10);
+            return expenses.filter(e => e.categoryId === id);
+        }
+
+        // ---------- Chart: X-axis = category names, Y-axis = total amount ----------
+        function renderChart() {
+            const filtered = getFilteredExpenses();
+            const summary = getSummaryByCategory(filtered);
+
+            const chartContainer = document.getElementById('chartContainer');
+            const chartEmpty = document.getElementById('chartEmpty');
+            const chartError = document.getElementById('chartError');
+
+            chartError.style.display = 'none';
+            chartEmpty.style.display = 'none';
+            chartContainer.style.display = summary.length ? 'block' : 'none';
+
+            if (summary.length === 0) {
+                chartEmpty.style.display = 'block';
+                if (chartInstance) {
+                    chartInstance.destroy();
+                    chartInstance = null;
+                }
+                return;
+            }
+
+            const labels = summary.map(d => d.categoryName);
+            const values = summary.map(d => d.totalAmount);
+
+            const ctx = document.getElementById('expenseChart').getContext('2d');
+            if (chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Total amount',
+                        data: values,
+                        backgroundColor: 'rgba(108, 158, 248, 0.7)',
+                        borderColor: 'rgba(108, 158, 248, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Total expense amount', color: '#8b8685' },
+                            ticks: { color: '#8b8685' },
+                            grid: { color: 'rgba(255,255,255,0.06)' }
+                        },
+                        x: {
+                            title: { display: true, text: 'Category', color: '#8b8685' },
+                            ticks: { color: '#8b8685' },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ---------- Expense table: Category Name, Amount, Expense Date ----------
+        function renderExpenseTable() {
+            const filtered = getFilteredExpenses();
+            const tbody = document.getElementById('expenseTableBody');
+            const wrapper = document.getElementById('tableWrapper');
+            const emptyEl = document.getElementById('tableEmpty');
+
+            wrapper.style.display = 'none';
+            emptyEl.style.display = 'none';
+
+            if (filtered.length === 0) {
+                emptyEl.style.display = 'block';
+                return;
+            }
+
+            const formatDate = (d) => {
+                try {
+                    const date = new Date(d);
+                    return isNaN(date.getTime()) ? d : date.toLocaleDateString();
+                } catch (_) { return d; }
+            };
+            const formatAmount = (a) => Number(a).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            tbody.innerHTML = filtered.map(e => `
+                <tr>
+                    <td>${escapeHtml(e.categoryName || '')}</td>
+                    <td class="amount">${formatAmount(e.amount)}</td>
+                    <td class="date">${formatDate(e.expenseDate)}</td>
+                </tr>
+            `).join('');
+            wrapper.style.display = 'block';
+        }
+
+        // ---------- Loading & error state helpers ----------
+        function setChartState(loading, error) {
+            document.getElementById('chartLoading').style.display = loading ? 'block' : 'none';
+            document.getElementById('chartError').style.display = error ? 'block' : 'none';
+            document.getElementById('chartError').textContent = error || '';
+            document.getElementById('chartContainer').style.display = error ? 'none' : (loading ? 'none' : 'block');
+            document.getElementById('chartEmpty').style.display = 'none';
+        }
+
+        function setTableState(loading, error) {
+            document.getElementById('tableLoading').style.display = loading ? 'block' : 'none';
+            document.getElementById('tableError').style.display = error ? 'block' : 'none';
+            document.getElementById('tableError').textContent = error || '';
+        }
+
+        // ---------- Refresh chart and table when filter changes ----------
+        function refresh() {
+            renderChart();
+            renderExpenseTable();
+        }
+
+        // ---------- Initial load ----------
+        async function init() {
+            const categoryFilter = document.getElementById('categoryFilter');
+
+            categoryFilter.addEventListener('change', refresh);
+
+            try {
+                setChartState(true, null);
+                setTableState(true, null);
+
+                await Promise.all([loadCategories(), loadExpenses()]);
+
+                setChartState(false, null);
+                setTableState(false, null);
+
+                renderCategoryFilter();
+                refresh();
+            } catch (e) {
+                const msg = e.message || 'Failed to load data';
+                setChartState(false, msg);
+                setTableState(false, msg);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

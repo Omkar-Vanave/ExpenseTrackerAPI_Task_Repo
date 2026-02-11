@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Category Management - Expense Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <a href="index.html" class="logo">Expense Tracker</a>
+            <nav class="nav">
+                <a href="index.html">Dashboard</a>
+                <a href="categories.html" class="active">Categories</a>
+                <a href="expenses.html">Expenses</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <h1 class="page-title">Category Management</h1>
+
+        <div id="messageArea"></div>
+
+        <!-- Create Category -->
+        <section class="card">
+            <div class="section-title">Create Category</div>
+            <form id="createForm" class="form-row">
+                <div class="form-group">
+                    <label for="createName">Category Name</label>
+                    <input type="text" id="createName" placeholder="e.g. Food, Transport" maxlength="200" required>
+                    <span class="hint">Category name must not be empty.</span>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn" id="createBtn">Create</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- View All Categories -->
+        <section class="card">
+            <div class="section-title">All Categories</div>
+            <div id="listLoading" class="loading-state" style="display: none;">
+                <span class="loading-spinner"></span>
+                <span style="margin-left: 0.5rem;">Loading categories…</span>
+            </div>
+            <div id="listError" class="error-state" style="display: none;"></div>
+            <div id="listEmpty" class="empty-state" style="display: none;">No categories yet. Create one above.</div>
+            <div class="table-wrapper" id="tableWrapper" style="display: none;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Category Id</th>
+                            <th>Category Name</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="categoryTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
+        <div class="modal" id="editModalContent">
+            <h3 id="editModalTitle">Edit Category</h3>
+            <p class="msg msg-info" style="margin-top: 0;">Updating the name does not affect existing expenses.</p>
+            <form id="editForm">
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label for="editName">Category Name</label>
+                    <input type="text" id="editName" required maxlength="200">
+                </div>
+                <div class="modal-actions">
+                    <button type="submit" class="btn">Save</button>
+                    <button type="button" class="btn btn-secondary" id="editCancel">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+
+        function showMessage(text, type) {
+            const el = document.getElementById('messageArea');
+            el.innerHTML = text ? `<div class="msg msg-${type}">${escapeHtml(text)}</div>` : '';
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        async function loadCategories() {
+            const res = await fetch(API_BASE + '/api/categories');
+            if (!res.ok) throw new Error('Failed to load categories');
+            return res.json();
+        }
+
+        function setListState(loading, error) {
+            document.getElementById('listLoading').style.display = loading ? 'block' : 'none';
+            document.getElementById('listError').style.display = error ? 'block' : 'none';
+            document.getElementById('listError').textContent = error || '';
+            document.getElementById('tableWrapper').style.display = 'none';
+            document.getElementById('listEmpty').style.display = 'none';
+        }
+
+        function renderTable(categories) {
+            const tbody = document.getElementById('categoryTableBody');
+            const wrapper = document.getElementById('tableWrapper');
+            const emptyEl = document.getElementById('listEmpty');
+
+            if (!categories || categories.length === 0) {
+                setListState(false, null);
+                emptyEl.style.display = 'block';
+                return;
+            }
+
+            tbody.innerHTML = categories.map(c => `
+                <tr>
+                    <td>${escapeHtml(String(c.id))}</td>
+                    <td>${escapeHtml(c.name)}</td>
+                    <td class="actions">
+                        <button type="button" class="btn btn-secondary" data-edit-id="${c.id}">Edit</button>
+                        <button type="button" class="btn btn-danger" data-delete-id="${c.id}">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            wrapper.style.display = 'block';
+            document.getElementById('listLoading').style.display = 'none';
+            document.getElementById('listError').style.display = 'none';
+            emptyEl.style.display = 'none';
+
+            tbody.querySelectorAll('[data-edit-id]').forEach(btn => {
+                const row = btn.closest('tr');
+                const name = row.querySelector('td:nth-child(2)').textContent;
+                btn.addEventListener('click', () => openEdit(btn.dataset.editId, name));
+            });
+            tbody.querySelectorAll('[data-delete-id]').forEach(btn => {
+                const row = btn.closest('tr');
+                const name = row.querySelector('td:nth-child(2)').textContent;
+                btn.addEventListener('click', () => deleteCategory(btn.dataset.deleteId, name));
+            });
+        }
+
+        async function refreshList() {
+            setListState(true, null);
+            try {
+                const data = await loadCategories();
+                renderTable(data);
+            } catch (e) {
+                setListState(false, e.message || 'Failed to load categories');
+            }
+        }
+
+        // Create: validation - name not empty
+        document.getElementById('createForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('createName');
+            const name = (input.value || '').trim();
+            if (!name) {
+                showMessage('Category name must not be empty.', 'error');
+                input.classList.add('invalid');
+                input.focus();
+                return;
+            }
+            input.classList.remove('invalid');
+            const btn = document.getElementById('createBtn');
+            btn.disabled = true;
+            showMessage('');
+            try {
+                const res = await fetch(API_BASE + '/api/categories', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showMessage(data.message || data.title || 'Failed to create category', 'error');
+                    return;
+                }
+                showMessage('Category created successfully.', 'success');
+                input.value = '';
+                await refreshList();
+            } catch (err) {
+                showMessage(err.message || 'Failed to create category', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        function openEdit(id, name) {
+            document.getElementById('editId').value = id;
+            document.getElementById('editName').value = name;
+            document.getElementById('editModal').style.display = 'flex';
+            document.getElementById('editName').focus();
+        }
+
+        const editModal = document.getElementById('editModal');
+        const editModalContent = document.getElementById('editModalContent');
+        document.getElementById('editCancel').addEventListener('click', () => { editModal.style.display = 'none'; });
+        editModal.addEventListener('click', (e) => { if (e.target === editModal) editModal.style.display = 'none'; });
+        editModalContent.addEventListener('click', (e) => e.stopPropagation());
+
+        document.getElementById('editForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('editId').value;
+            const name = (document.getElementById('editName').value || '').trim();
+            if (!name) {
+                showMessage('Category name must not be empty.', 'error');
+                return;
+            }
+            showMessage('');
+            try {
+                const res = await fetch(API_BASE + '/api/categories/' + id, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showMessage(data.message || data.title || 'Failed to update category', 'error');
+                    return;
+                }
+                document.getElementById('editModal').style.display = 'none';
+                showMessage('Category updated successfully.', 'success');
+                await refreshList();
+            } catch (err) {
+                showMessage(err.message || 'Failed to update category', 'error');
+            }
+        });
+
+        async function deleteCategory(id, name) {
+            if (!confirm(`Delete category "${name}"? This will fail if any expenses are linked to it.`)) return;
+            showMessage('');
+            try {
+                const res = await fetch(API_BASE + '/api/categories/' + id, { method: 'DELETE' });
+                if (res.status === 204) {
+                    showMessage('Category deleted successfully.', 'success');
+                    await refreshList();
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 400 && data.message) {
+                    showMessage(data.message, 'error');
+                    return;
+                }
+                showMessage(data.message || data.title || 'Failed to delete category', 'error');
+            } catch (err) {
+                showMessage(err.message || 'Failed to delete category', 'error');
+            }
+        }
+
+        refreshList();
+    </script>
+</body>
+</html>

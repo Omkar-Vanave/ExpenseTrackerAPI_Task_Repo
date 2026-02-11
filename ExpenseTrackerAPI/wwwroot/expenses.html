@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Management - Expense Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <a href="index.html" class="logo">Expense Tracker</a>
+            <nav class="nav">
+                <a href="index.html">Dashboard</a>
+                <a href="categories.html">Categories</a>
+                <a href="expenses.html" class="active">Expenses</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <h1 class="page-title">Expense Management</h1>
+
+        <div id="messageArea"></div>
+
+        <!-- Add Expense -->
+        <section class="card">
+            <div class="section-title">Add Expense</div>
+            <form id="addForm" class="form-row">
+                <div class="form-group">
+                    <label for="addCategory">Category</label>
+                    <select id="addCategory" required>
+                        <option value="">Select category</option>
+                    </select>
+                    <span class="hint">Category must exist. Create categories first if needed.</span>
+                </div>
+                <div class="form-group">
+                    <label for="addAmount">Amount</label>
+                    <input type="number" id="addAmount" step="0.01" min="0.01" placeholder="0.00" required>
+                    <span class="hint">Amount must be positive.</span>
+                </div>
+                <div class="form-group">
+                    <label for="addDate">Expense Date</label>
+                    <input type="date" id="addDate" required>
+                    <span class="hint">Date cannot be in the future.</span>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn" id="addBtn">Add Expense</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- View All Expenses -->
+        <section class="card">
+            <div class="section-title">All Expenses</div>
+            <div id="listLoading" class="loading-state" style="display: none;">
+                <span class="loading-spinner"></span>
+                <span style="margin-left: 0.5rem;">Loading expenses…</span>
+            </div>
+            <div id="listError" class="error-state" style="display: none;"></div>
+            <div id="listEmpty" class="empty-state" style="display: none;">No expenses yet. Add one above.</div>
+            <div class="table-wrapper" id="tableWrapper" style="display: none;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Category Name</th>
+                            <th>Amount</th>
+                            <th>Expense Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expenseTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const API_BASE = '';
+
+        let categories = [];
+
+        function showMessage(text, type) {
+            const el = document.getElementById('messageArea');
+            el.innerHTML = text ? `<div class="msg msg-${type}">${escapeHtml(text)}</div>` : '';
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        async function loadCategories() {
+            const res = await fetch(API_BASE + '/api/categories');
+            if (!res.ok) throw new Error('Failed to load categories');
+            const data = await res.json();
+            categories = data;
+            return data;
+        }
+
+        function renderCategoryDropdown() {
+            const sel = document.getElementById('addCategory');
+            const first = '<option value="">Select category</option>';
+            const opts = categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+            sel.innerHTML = first + opts;
+        }
+
+        async function loadExpenses() {
+            const res = await fetch(API_BASE + '/api/expenses');
+            if (!res.ok) throw new Error('Failed to load expenses');
+            return res.json();
+        }
+
+        function setListState(loading, error) {
+            document.getElementById('listLoading').style.display = loading ? 'block' : 'none';
+            document.getElementById('listError').style.display = error ? 'block' : 'none';
+            document.getElementById('listError').textContent = error || '';
+            document.getElementById('tableWrapper').style.display = 'none';
+            document.getElementById('listEmpty').style.display = 'none';
+        }
+
+        function formatDate(d) {
+            try {
+                const date = new Date(d);
+                return isNaN(date.getTime()) ? String(d) : date.toLocaleDateString();
+            } catch (_) { return String(d); }
+        }
+
+        function formatAmount(a) {
+            return Number(a).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function renderTable(expenses) {
+            const tbody = document.getElementById('expenseTableBody');
+            const wrapper = document.getElementById('tableWrapper');
+            const emptyEl = document.getElementById('listEmpty');
+
+            if (!expenses || expenses.length === 0) {
+                setListState(false, null);
+                emptyEl.style.display = 'block';
+                return;
+            }
+
+            tbody.innerHTML = expenses.map(e => `
+                <tr>
+                    <td>${escapeHtml(e.categoryName || '')}</td>
+                    <td class="amount">${formatAmount(e.amount)}</td>
+                    <td class="date">${formatDate(e.expenseDate)}</td>
+                    <td class="actions">
+                        <button type="button" class="btn btn-danger" data-delete-id="${e.id}">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            wrapper.style.display = 'block';
+            document.getElementById('listLoading').style.display = 'none';
+            document.getElementById('listError').style.display = 'none';
+            emptyEl.style.display = 'none';
+
+            tbody.querySelectorAll('[data-delete-id]').forEach(btn => {
+                btn.addEventListener('click', () => deleteExpense(btn.dataset.deleteId));
+            });
+        }
+
+        async function refreshList() {
+            setListState(true, null);
+            try {
+                const data = await loadExpenses();
+                renderTable(data);
+            } catch (e) {
+                setListState(false, e.message || 'Failed to load expenses');
+            }
+        }
+
+        // Set default date to today (max for validation)
+        function setDefaultDate() {
+            const input = document.getElementById('addDate');
+            const today = new Date().toISOString().slice(0, 10);
+            input.setAttribute('max', today);
+            if (!input.value) input.value = today;
+        }
+
+        document.getElementById('addForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const categoryId = document.getElementById('addCategory').value;
+            const amountInput = document.getElementById('addAmount');
+            const dateInput = document.getElementById('addDate');
+            const amount = parseFloat(amountInput.value, 10);
+            const dateStr = dateInput.value;
+
+            showMessage('');
+            amountInput.classList.remove('invalid');
+            dateInput.classList.remove('invalid');
+
+            // Validation: category must be selected
+            if (!categoryId) {
+                showMessage('Please select a category.', 'error');
+                return;
+            }
+
+            // Validation: amount must be positive
+            if (isNaN(amount) || amount <= 0) {
+                showMessage('Amount must be positive.', 'error');
+                amountInput.classList.add('invalid');
+                amountInput.focus();
+                return;
+            }
+
+            // Validation: expense date cannot be in the future
+            const today = new Date().toISOString().slice(0, 10);
+            if (dateStr > today) {
+                showMessage('Expense date cannot be in the future.', 'error');
+                dateInput.classList.add('invalid');
+                dateInput.focus();
+                return;
+            }
+
+            const btn = document.getElementById('addBtn');
+            btn.disabled = true;
+            try {
+                const res = await fetch(API_BASE + '/api/expenses', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        categoryId: parseInt(categoryId, 10),
+                        amount,
+                        expenseDate: dateStr
+                    })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    const msg = data.message || data.title || 'Failed to add expense';
+                    showMessage(msg, 'error');
+                    return;
+                }
+                showMessage('Expense added successfully.', 'success');
+                document.getElementById('addForm').reset();
+                setDefaultDate();
+                await refreshList();
+            } catch (err) {
+                showMessage(err.message || 'Failed to add expense', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        async function deleteExpense(id) {
+            if (!confirm('Delete this expense?')) return;
+            showMessage('');
+            try {
+                const res = await fetch(API_BASE + '/api/expenses/' + id, { method: 'DELETE' });
+                if (res.status === 204) {
+                    showMessage('Expense deleted successfully.', 'success');
+                    await refreshList();
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                showMessage(data.message || data.title || 'Failed to delete expense', 'error');
+            } catch (err) {
+                showMessage(err.message || 'Failed to delete expense', 'error');
+            }
+        }
+
+        async function init() {
+            setDefaultDate();
+            try {
+                await loadCategories();
+                renderCategoryDropdown();
+                await refreshList();
+            } catch (e) {
+                setListState(false, e.message || 'Failed to load data');
+                showMessage('Failed to load categories. Create categories first.', 'error');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
